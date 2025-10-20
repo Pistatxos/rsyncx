@@ -1,0 +1,45 @@
+# Filtros globales de rsyncx
+# Formato rsync-filter:
+# - Excluir => "- pattern"
+# + Incluir => "+ pattern"
+
+# Carpetas del sistema y ocultas
+- @eaDir/
+- .Trash*/
+- .Spotlight*/
+- .fseventsd/
+- .TemporaryItems/
+- .cache/
+- .idea/
+- **/.idea/
+
+# Carpetas de entornos virtuales
+- venv/
+- **/venv/
+- VENV/
+- **/VENV/
+- VENV_GitHub/
+- **/VENV_GitHub/
+- menv/
+- **/menv/
+
+# Carpetas de compilación y temporales
+- __pycache__/
+- **/__pycache__/
+- node_modules/
+- **/node_modules/
+- dist/
+- **/dist/
+- build/
+- **/build/
+
+# Archivos temporales y de sistema
+- .DS_Store
+- Thumbs.db
+- *.pyc
+- *.pyo
+- *.tmp
+- *.swp
+- *.swo
+- *.log
+- @eaDir

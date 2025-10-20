@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rsyncx"
+version = "0.1.0"
+description = "Sincroniza tus datos de manera segura con rsyncx (basado en rsync) donde se incluye papelera para no perder datos, con .ignore para ignorar archivos o carpetas y válidao para Synology o Servidor."
+authors = [
+    { name = "Mario x" }
+]
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+keywords = ["rsync", "sync", "backup", "Synology", "NAS", "mirror", "CLI"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+]
+
+[project.urls]
+Homepage = "https://github.com/pistatxos/rsyncx"
+Repository = "https://github.com/pistatxos/rsyncx"
+Issues = "https://github.com/pistatxos/rsyncx/issues"
+
+[project.scripts]
+rsyncx = "rsyncx.main:main"
