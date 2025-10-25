@@ -63,20 +63,6 @@ SINCRONIZAR = [
 
 ---
 
-
-## 🚀 Uso
-
-🔄 Sincronización completa (push + pull)
-
-Ejecuta el flujo completo para todos los grupos definidos en la configuración:
-
-```rsyncx run```
-
-Esto realiza primero un pull (descarga de cambios remotos) y luego un push (subida de cambios locales),
-garantizando que siempre se descarguen los archivos nuevos antes de subir los cambios.
-
----
-
 ## ☁️ Subir cambios (push)
 
 Envía los cambios locales al servidor remoto:
@@ -97,7 +83,7 @@ O bien, para un grupo concreto:
 🔑 Si no puede usar la clave privada, se usa automáticamente autenticación por contraseña (sshpass).
 
 
----
+
 
 ## 💾 Descargar cambios (pull)
 

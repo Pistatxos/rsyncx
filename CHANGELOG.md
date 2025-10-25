@@ -3,6 +3,11 @@
 ---
 ---
 
+## [0.1.6] — 2025-10-25
+- Quitamos run y dejamos pull & push a uso del usuario que decide que hacer tipo git.
+
+---
+
 ## [0.1.5] — 2025-10-25
 - Se añade creación de papelera si no existe.
 
