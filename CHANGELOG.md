@@ -3,23 +3,13 @@
 ---
 ---
 
-## [0.1.6] — 2025-10-25
-- Quitamos run y dejamos pull & push a uso del usuario que decide que hacer tipo git.
-
----
-
 ## [0.1.5] — 2025-10-25
-- Se añade creación de papelera si no existe.
+- Actualizado push-pull-purge para que la conexión primero prueba en local y luego en vpn.
 
 ---
 
 ## [0.1.4] — 2025-10-25
-- Se añaden los archivos de estado (state.json) y registro de borrados (deleted.json) para cada grupo de sincronización.
-- Se crean automáticamente las carpetas ~/.xsoft/rsyncx/state/ y ~/.xsoft/rsyncx/deleted/ durante la configuración inicial (rsyncx configure).
-- Cada grupo mantiene su propio archivo de estado en state/<grupo>.json, con la lista de archivos sincronizados y su timestamp de última actualización.
-- Los borrados locales ahora se registran en deleted/<grupo>.json, permitiendo un historial seguro y auditable de archivos eliminados.
-- Se garantiza compatibilidad total con sincronizaciones previas: si no existen los nuevos archivos de estado, se crean sin afectar al contenido existente.
-- Se mantiene el flujo normal de sincronización (pull, push, run, purge), integrando los nuevos archivos de forma transparente.
+- Se configura con push & pull tipo git para que el usuario tenga el control/elección total.
 
 ---
 
