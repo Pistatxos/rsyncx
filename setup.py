@@ -23,7 +23,7 @@ servers = {
         "remote": "/volume1/Backup/rsyncx_folder/",
         "identity": "passw",
         "file": "",
-        "passw": "xxx",
+        "passw": "<aqui_tu_pass>",
     }
 }
 
@@ -89,7 +89,7 @@ post_install()
 
 setup(
     name="rsyncx",
-    version="0.1.0",
+    version="0.1.5",
     author="Mario x",
     description="Sincronizador seguro basado en rsync con control de papelera y multi-equipo",
     packages=find_packages(),

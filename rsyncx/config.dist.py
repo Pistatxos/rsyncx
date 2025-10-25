@@ -24,7 +24,7 @@ servers = {
         "user": "rsyncx_mac",
         "remote": "/volume1/Backup/rsyncx_folder",
         "identity": "passw",         # por ahora solo 'passw'
-        "passw": "cambia_esta_contraseña",
+        "passw": "<aqui_tu_pass>",
         "rsync_path": "/usr/bin/rsync"
     }
 }

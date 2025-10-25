@@ -41,7 +41,7 @@ servers = {
         'user': 'rsyncx_user',
         'remote': '/volume1/Backup/rsyncx_mac/',
         'identity': 'passw',
-        'passw': 'cambia_esto'
+        'passw': '<aqui_tu_pass>'
     }
 }
 
@@ -72,7 +72,8 @@ Ejecuta el flujo completo para todos los grupos definidos en la configuración:
 
 ```rsyncx run```
 
-Esto realiza un push (subida de cambios locales) seguido de un pull (descarga de cambios remotos).
+Esto realiza primero un pull (descarga de cambios remotos) y luego un push (subida de cambios locales),
+garantizando que siempre se descarguen los archivos nuevos antes de subir los cambios.
 
 ---
 

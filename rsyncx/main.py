@@ -1,21 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-# rsyncx - CLI de sincronización segura basada en rsync (Synology + multi-equipo)
+# rsyncx - Sincronización segura (Synology + multi-equipo) con propagación de borrados
 # -----------------------------------------------------------------------------
 # Comandos:
-#   configure  -> instala dependencias y crea ~/.xsoft/rsyncx/config.py desde rsyncx/config.dist.py
-#   push       -> SUBE (local -> remoto) con papelera versionada en remoto
-#   pull       -> BAJA (remoto -> local) y sincroniza también _papelera (solo pull)
-#   run        -> push + pull
+#   configure  -> crea ~/.xsoft/rsyncx/ (config, filtros, state/, deleted/)
+#   push       -> SUBE (local -> remoto) con papelera versionada y marcadores de borrado
+#   pull       -> BAJA (remoto -> local), aplica borrados (mueve a _papelera) y trae cambios
+#   run        -> pull + push (orden seguro)
 #   purge      -> borra papeleras local y remota
-#
-# Consideraciones:
-#   - La "papelera maestra" es la del Synology. La local es un espejo (solo pull).
-#   - En push NO subimos la papelera local.
-#   - En pull NO borramos archivos locales si no existen en remoto (protección).
-#   - En pull SÍ espejamos la papelera (remota) en local.
-#   - Si no hay args, mostramos ayuda (igual que -h/--help).
 # -----------------------------------------------------------------------------
 
 import argparse
@@ -23,120 +16,40 @@ import os
 import sys
 import subprocess
 import shutil
-import platform
 import importlib.util
 import socket
+import json
 from pathlib import Path
+from datetime import datetime, timezone
 
-# Import de nuestro helper de rsync (para PUSH). PON EL IMPORT PAQUETIZADO.
-from rsyncx.rsync_command import build_rsync_command, run_rsync
-
-# Rutas fijas del proyecto/config
+# -----------------------------------------------------------------------------
+# Rutas base (config + estado)
+# -----------------------------------------------------------------------------
 CONFIG_DIR = Path.home() / ".xsoft" / "rsyncx"
 CONFIG_PATH = CONFIG_DIR / "config.py"
-PACKAGE_DIR = Path(__file__).resolve().parent     # .rsync-filter vive dentro del paquete
-RSYNC_FILTER_FILE = Path.home() / ".xsoft/rsyncx/.rsync-filter"
-CONFIG_DIST = PACKAGE_DIR / "config.dist.py" # plantilla incluida en el paquete
+RSYNC_FILTER_FILE = CONFIG_DIR / ".rsync-filter"
+STATE_DIR = CONFIG_DIR / "state"
+DELETED_DIR = CONFIG_DIR / "deleted"
 
+# Marcadores de borrado en servidor
+DELETED_MARKER_EXT = ".rsyncx_deleted"
 
 # -----------------------------------------------------------------------------
-# Utilidades genéricas
+# Utilidades varias
 # -----------------------------------------------------------------------------
-
 def print_header():
-    print("rsyncx - sincronizador seguro (push/pull) con papelera remota")
+    print("rsyncx - sincronizador seguro (pull/push) con papelera y borrados propagados")
 
+def iso_now():
+    return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 
-def ensure_config_exists():
-    """Crea ~/.xsoft/rsyncx/config.py y ~/.xsoft/rsyncx/.rsync-filter si no existen, desde los ficheros del paquete."""
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-
-    # --- CONFIG PRINCIPAL ---
-    if not CONFIG_PATH.exists():
-        if CONFIG_DIST.exists():
-            shutil.copyfile(CONFIG_DIST, CONFIG_PATH)
-            print(f"✔ Config creado: {CONFIG_PATH}")
-        else:
-            CONFIG_PATH.write_text(
-                "# Config de ejemplo para rsyncx\n\n"
-                "parallel = 2\n"
-                "rsync_path = '/usr/bin/rsync'\n\n"
-                "servers = {\n"
-                "    'default': {\n"
-                "        'host_local': '192.168.1.185',\n"
-                "        'host_vpn': '100.95.203.63',\n"
-                "        'port': 2908,\n"
-                "        'user': 'rsyncx_user',\n"
-                "        'remote': '/volume1/devBackup/rsyncx_mac/',\n"
-                "        'identity': 'passw',\n"
-                "        'file': '',\n"
-                "        'passw': 'cambia_esto'\n"
-                "    }\n"
-                "}\n\n"
-                "SINCRONIZAR = [\n"
-                "    {\n"
-                "        'grupo': 'ejemplo',\n"
-                "        'server': 'default',\n"
-                "        'name_folder_backup': 'carpetaEjemplo',\n"
-                "        'sync': '~/rsyncx_demo/'\n"
-                "    }\n"
-                "]\n"
-            )
-            print(f"✔ Config de emergencia generado: {CONFIG_PATH}")
-    else:
-        print(f"✔ Config existente: {CONFIG_PATH}")
-
-    # --- FILTRO RSYNC ---
-    FILTER_PATH = CONFIG_DIR / ".rsync-filter"
-    if not FILTER_PATH.exists():
-        FILTER_PATH.write_text(
-            "# Filtros globales de rsyncx\n"
-            "# Formato rsync-filter:\n"
-            "# - Excluir => \"- pattern\"\n"
-            "# + Incluir => \"+ pattern\"\n\n"
-            "# Carpetas del sistema y ocultas\n"
-            "- @eaDir/\n"
-            "- .Trash*/\n"
-            "- .Spotlight*/\n"
-            "- .fseventsd/\n"
-            "- .TemporaryItems/\n"
-            "- .cache/\n"
-            "- .idea/\n"
-            "- **/.idea/\n\n"
-            "# Carpetas de entornos virtuales\n"
-            "- venv/\n"
-            "- **/venv/\n"
-            "- VENV/\n"
-            "- **/VENV/\n"
-            "- menv/\n"
-            "- **/menv/\n\n"
-            "# Carpetas de compilación y temporales\n"
-            "- __pycache__/\n"
-            "- **/__pycache__/\n"
-            "- node_modules/\n"
-            "- **/node_modules/\n"
-            "- dist/\n"
-            "- **/dist/\n"
-            "- build/\n"
-            "- **/build/\n\n"
-            "# Archivos temporales y de sistema\n"
-            "- .DS_Store\n"
-            "- Thumbs.db\n"
-            "- *.pyc\n"
-            "- *.pyo\n"
-            "- *.tmp\n"
-            "- *.swp\n"
-            "- *.swo\n"
-            "- *.log\n"
-            "- @eaDir\n"
-        )
-        print(f"✔ Filtro creado: {FILTER_PATH}")
-    else:
-        print(f"✔ Filtro existente: {FILTER_PATH}")
-
+def safe_group_id(group_conf):
+    """ID seguro de grupo para ficheros de estado (por nombre de grupo)."""
+    name = group_conf.get("grupo", "default")
+    # slug simple
+    return "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in name)
 
 def load_config():
-    """Carga ~/.xsoft/rsyncx/config.py como módulo."""
     if not CONFIG_PATH.exists():
         print("❌ No se encontró configuración. Ejecuta: rsyncx configure")
         sys.exit(1)
@@ -145,61 +58,122 @@ def load_config():
     spec.loader.exec_module(config)
     return config
 
+def ensure_config_exists():
+    """Crea estructura ~/.xsoft/rsyncx/ mínima (config, filtros, state/, deleted/)."""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    DELETED_DIR.mkdir(parents=True, exist_ok=True)
 
-def install_if_missing(pkg):
-    """Instala (si es posible) un paquete del SO (rsync, sshpass) en macOS/Linux. En otros SO, solo avisa."""
-    print(f"• comprobando {pkg}...")
-    if shutil.which(pkg):
-        print(f"  ✔ {pkg} ya está instalado.")
-        return True
-
-    system = platform.system().lower()
-    if "darwin" in system:
-        # macOS
-        if shutil.which("brew"):
-            print(f"  ➜ instalando {pkg} con Homebrew...")
-            os.system(f"brew install {pkg}")
-            ok = shutil.which(pkg) is not None
-            print("  ✔ ok" if ok else "  ✖ fallo")
-            return ok
-        else:
-            print(f"  ✖ Homebrew no encontrado. Instala {pkg} manualmente: https://brew.sh/")
-            return False
-    elif "linux" in system:
-        print(f"  ➜ intentando apt/dnf para {pkg}...")
-        rc = os.system(f"sudo apt-get install -y {pkg} || sudo dnf install -y {pkg}")
-        ok = (rc == 0) and shutil.which(pkg)
-        print("  ✔ ok" if ok else "  ✖ fallo")
-        return bool(ok)
+    if not CONFIG_PATH.exists():
+        CONFIG_PATH.write_text(
+            "# rsyncx config\n\n"
+            "servers = {\n"
+            "    'default': {\n"
+            "        'host_local': '192.168.1.2',\n"
+            "        'host_vpn': '',\n"
+            "        'port': 22,\n"
+            "        'user': 'rsyncx_user',\n"
+            "        'remote': '/volume1/devBackup/rsyncx_default/',\n"
+            "        'passw': 'cambia_esto'\n"
+            "    }\n"
+            "}\n\n"
+            "SINCRONIZAR = [\n"
+            "    {\n"
+            "        'grupo': 'ejemplo',\n"
+            "        'server': 'default',\n"
+            "        'name_folder_backup': 'carpetaEjemplo',\n"
+            "        'sync': '~/rsyncx_demo/'\n"
+            "    }\n"
+            "]\n"
+        )
+        print(f"✔ Config creado: {CONFIG_PATH}")
     else:
-        print(f"  ✖ instalación automática no soportada en {system}. Instala {pkg} manualmente.")
+        print(f"✔ Config existente: {CONFIG_PATH}")
+
+    if not RSYNC_FILTER_FILE.exists():
+        RSYNC_FILTER_FILE.write_text(
+            "# Filtros globales de rsyncx\n"
+            "# (formato rsync-filter: '- pattern' excluye, '+ pattern' incluye)\n"
+            "- @eaDir/\n"
+            "- .Trash*/\n"
+            "- .Spotlight*/\n"
+            "- .fseventsd/\n"
+            "- .TemporaryItems/\n"
+            "- .cache/\n"
+            "- .idea/\n"
+            "- **/.idea/\n"
+            "- venv/\n"
+            "- **/venv/\n"
+            "- VENV/\n"
+            "- **/VENV/\n"
+            "- menv/\n"
+            "- **/menv/\n"
+            "- __pycache__/\n"
+            "- **/__pycache__/\n"
+            "- node_modules/\n"
+            "- **/node_modules/\n"
+            "- dist/\n"
+            "- **/dist/\n"
+            "- build/\n"
+            "- **/build/\n"
+            "- .DS_Store\n"
+            "- Thumbs.db\n"
+            "- *.pyc\n"
+            "- *.pyo\n"
+            "- *.tmp\n"
+            "- *.swp\n"
+            "- *.swo\n"
+            "- *.log\n"
+        )
+        print(f"✔ Filtro creado: {RSYNC_FILTER_FILE}")
+    else:
+        print(f"✔ Filtro existente: {RSYNC_FILTER_FILE}")
+
+
+def ensure_remote_papelera(server_conf, remote_path):
+    """
+    Crea la carpeta _papelera en el remoto si no existe.
+    Usa la contraseña o la clave SSH según la configuración.
+    """
+    user = server_conf["user"]
+    host = server_conf.get("host_local") or server_conf.get("host_vpn")
+    port = server_conf["port"]
+    passw = server_conf.get("passw")
+    identity = server_conf.get("identity")
+    remote_papelera = f"{remote_path.rstrip('/')}/_papelera"
+
+    print(f"🧩 Verificando carpeta remota _papelera en {host}...")
+
+    if not host:
+        print("⚠ No hay host definido (ni local ni VPN) para crear _papelera.")
         return False
 
-
-def configure():
-    """Instala dependencias (en lo posible) y crea el config desde la plantilla del paquete."""
-    print_header()
-    print("⚙ Preparando entorno (configure)...")
-
-    ensure_config_exists()
-
-    print("\n🔍 Comprobando dependencias del sistema...")
-    rsync_ok = install_if_missing("rsync")
-    sshpass_ok = install_if_missing("sshpass")
-
-    if rsync_ok and sshpass_ok:
-        print("✔ Todas las dependencias necesarias están disponibles.")
+    if identity and identity != "passw":
+        # Con clave privada
+        cmd = [
+            "ssh", "-p", str(port), "-i", identity,
+            f"{user}@{host}",
+            f"mkdir -p '{remote_papelera}'"
+        ]
     else:
-        print("⚠ Algunas dependencias faltan. Revisa manualmente su instalación.")
+        # Con contraseña (sshpass)
+        cmd = [
+            "sshpass", "-p", passw,
+            "ssh", "-p", str(port),
+            f"{user}@{host}",
+            f"mkdir -p '{remote_papelera}'"
+        ]
 
-    print("\n✔ Configuración inicial lista. Edita si hace falta:")
-    print(f"  {CONFIG_PATH}")
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        print("📁 Carpeta _papelera verificada o creada correctamente.")
+    except subprocess.CalledProcessError as e:
+        print(f"⚠ No se pudo crear/verificar _papelera: {e.stderr.decode().strip()}")
 
-
+# -----------------------------------------------------------------------------
+# Red / remoto
+# -----------------------------------------------------------------------------
 def choose_reachable_host(server_conf):
-    """
-    Devuelve host accesible (local o VPN) probando un socket al puerto configurado.
-    """
     local_host = server_conf.get("host_local")
     vpn_host = server_conf.get("host_vpn")
     port = int(server_conf.get("port", 22))
@@ -211,23 +185,15 @@ def choose_reachable_host(server_conf):
                 return local_host
         except Exception:
             pass
-
     if vpn_host:
         print(f"🛰 Usando host VPN: {vpn_host}")
         return vpn_host
-
-    print("❌ No hay host_local ni host_vpn definido en el server.")
+    print("❌ No se pudo alcanzar ningún host (host_local/host_vpn).")
     sys.exit(1)
 
-
 def ensure_remote_dirs(server_conf, host_selected, remote_root):
-    """
-    Verifica o crea la estructura remota (_papelera incluida) usando sshpass -e
-    con entorno explícito (corrige fallos en macOS).
-    """
     env = os.environ.copy()
     env["SSHPASS"] = server_conf.get("passw", "")
-
     cmd = [
         "sshpass", "-e",
         "ssh", "-o", "StrictHostKeyChecking=no",
@@ -235,299 +201,341 @@ def ensure_remote_dirs(server_conf, host_selected, remote_root):
         f"{server_conf['user']}@{host_selected}",
         f"mkdir -p '{remote_root}' '{remote_root}/_papelera'"
     ]
-
-    print(f"🛠 Verificando estructura remota ({host_selected})...")
     try:
-        result = subprocess.run(cmd, check=True, text=True, capture_output=True, env=env)
-        if result.stdout.strip():
-            print(result.stdout.strip())
+        subprocess.run(cmd, check=True, env=env)
         print("🧱 Estructura remota verificada correctamente.")
-    except subprocess.CalledProcessError as e:
-        stderr = (e.stderr or "").strip().lower()
+    except subprocess.CalledProcessError:
+        print("⚠ No se pudo crear/verificar estructura remota (posible falta de permisos).")
 
-        # Si fue un fallo de clave privada, no mostramos mensaje técnico
-        if "permission denied" in stderr or "please try again" in stderr:
-            # Silencio total: simplemente dejamos que el siguiente paso use sshpass
-            pass
-        else:
-            # Otros errores sí deben mostrarse
-            print(f"⚠ No se pudo asegurar la estructura remota: {e.stderr.strip() if e.stderr else e}")
+# -----------------------------------------------------------------------------
+# Estado y borrados (local y marcadores en servidor)
+# -----------------------------------------------------------------------------
+def state_file_for_group(group_conf):
+    return STATE_DIR / f"{safe_group_id(group_conf)}.json"
 
+def deleted_log_for_group(group_conf):
+    return DELETED_DIR / f"{safe_group_id(group_conf)}.json"
 
-def is_remote_empty(server_conf, host_selected, remote_root):
-    """
-    Devuelve True si la carpeta remota está vacía (primera sincronización),
-    False si tiene contenido. Si no podemos saberlo, devolvemos False (comportamiento conservador).
-    """
-    passw = server_conf.get("passw", "")
+def read_state(group_conf):
+    p = state_file_for_group(group_conf)
+    if p.exists():
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+    return {}
+
+def write_state(group_conf, files_snapshot):
+    p = state_file_for_group(group_conf)
+    data = {
+        "timestamp": iso_now(),
+        "files": sorted(files_snapshot),
+    }
+    try:
+        p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        print(f"⚠ No se pudo escribir estado: {p} -> {e}")
+
+def append_deleted_log(group_conf, deleted_list):
+    if not deleted_list:
+        return
+    p = deleted_log_for_group(group_conf)
+    history = []
+    if p.exists():
+        try:
+            history = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            history = []
+    entry = {
+        "timestamp": iso_now(),
+        "deleted": sorted(deleted_list),
+    }
+    history.append(entry)
+    try:
+        p.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        print(f"⚠ No se pudo actualizar log de borrados: {p} -> {e}")
+
+def list_current_local_files(local_path: Path):
+    out = []
+    for item in local_path.rglob("*"):
+        if item.is_file():
+            # ignorar control y papelera
+            if "_papelera" in item.parts:
+                continue
+            if item.name.endswith(DELETED_MARKER_EXT):
+                continue
+            if item.name.startswith(".rsyncx_"):
+                continue
+            out.append(str(item.relative_to(local_path)))
+    return out
+
+def create_deletion_marker(server_conf, host, remote_root, relative_file):
+    """Crea un marcador *en el servidor* para propagar el borrado a otros equipos."""
+    env = os.environ.copy()
+    env["SSHPASS"] = server_conf.get("passw", "")
+    marker_path = f"{remote_root}/{relative_file}{DELETED_MARKER_EXT}"
     cmd = [
-        "sshpass", "-p", passw,
+        "sshpass", "-e",
         "ssh", "-o", "StrictHostKeyChecking=no",
         "-p", str(server_conf["port"]),
-        f"{server_conf['user']}@{host_selected}",
-        f"bash -lc \"shopt -s dotglob nullglob 2>/dev/null; "
-        f"items=({remote_root}/*); "
-        f"if [ -e \\\"$remote_root\\\" ] && [ ! -e \\\"${{items[0]}}\\\" ]; then echo EMPTY; else echo NONEMPTY; fi\""
+        f"{server_conf['user']}@{host}",
+        # Crear directorio y tocar marcador con timestamp
+        f"mkdir -p \"$(dirname '{marker_path}')\" && date -Is > '{marker_path}'"
+    ]
+    subprocess.run(cmd, check=False, env=env)
+
+def get_deletion_markers(server_conf, host, remote_root):
+    """Devuelve lista de rutas relativas (con respecto a remote_root) marcadas como borradas en servidor."""
+    env = os.environ.copy()
+    env["SSHPASS"] = server_conf.get("passw", "")
+    cmd = [
+        "sshpass", "-e",
+        "ssh", "-o", "StrictHostKeyChecking=no",
+        "-p", str(server_conf["port"]),
+        f"{server_conf['user']}@{host}",
+        f"find '{remote_root}' -type f -name '*{DELETED_MARKER_EXT}' -print"
     ]
     try:
-        out = subprocess.check_output(" ".join(cmd), shell=True, text=True).strip()
-        return (out == "EMPTY")
-    except Exception:
-        return False
+        res = subprocess.run(cmd, capture_output=True, text=True, check=True, env=env)
+        lines = [l.strip() for l in res.stdout.splitlines() if l.strip()]
+        out = []
+        prefix = remote_root.rstrip("/") + "/"
+        for abs_marker in lines:
+            if abs_marker.startswith(prefix):
+                rel_marker = abs_marker[len(prefix):]
+            else:
+                rel_marker = abs_marker
+            rel_file = rel_marker[:-len(DELETED_MARKER_EXT)]
+            out.append(rel_file)
+        return out
+    except subprocess.CalledProcessError:
+        return []
 
+def apply_deletion_markers_locally(local_path: Path, rel_files):
+    """Mueve a _papelera los archivos locales listados en rel_files (si existen)."""
+    if not rel_files:
+        return 0
+    moved = 0
+    trash_root = local_path / "_papelera"
+    for rel in rel_files:
+        src = local_path / rel
+        if src.exists() and src.is_file():
+            dst_dir = trash_root / Path(rel).parent
+            dst_dir.mkdir(parents=True, exist_ok=True)
+            # renombrar con timestamp para no sobrescribir
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            stem = src.stem
+            suff = src.suffix
+            dst = dst_dir / f"{stem}_{ts}{suff}"
+            try:
+                shutil.move(str(src), str(dst))
+                moved += 1
+            except Exception:
+                pass
+    return moved
 
 # -----------------------------------------------------------------------------
-# PUSH: local -> remoto (papelera versionada en remoto)
+# PUSH (marca borrados + sube cambios con backup y delete seguro)
 # -----------------------------------------------------------------------------
-
 def sync_push(group_conf, server_conf):
     print(f"\n🟢 SUBIENDO (push) grupo: {group_conf['grupo']}")
     local_path = Path(group_conf["sync"]).expanduser()
     remote_root = os.path.join(server_conf["remote"], group_conf["name_folder_backup"])
+    host = choose_reachable_host(server_conf)
+    ensure_remote_papelera(server_conf, remote_root)
+    ensure_remote_dirs(server_conf, host, remote_root)
 
-    host_selected = choose_reachable_host(server_conf)
-    ensure_remote_dirs(server_conf, host_selected, remote_root)
+    # --- Detectar borrados locales respecto al último estado y crear marcadores en servidor
+    prev = set(read_state(group_conf).get("files", []))
+    cur = set(list_current_local_files(local_path))
+    deleted_locally = sorted(prev - cur) if prev else []
+    if deleted_locally:
+        print(f"📝 Borrados locales detectados: {len(deleted_locally)} (se crearán marcadores y el push los moverá a papelera remota)")
+        for rel in deleted_locally:
+            create_deletion_marker(server_conf, host, remote_root, rel)
+        append_deleted_log(group_conf, deleted_locally)
 
-    # Pasamos el host elegido al server_conf para que lo use build_rsync_command
-    server_conf = dict(server_conf)
-    server_conf["selected_host"] = host_selected
-
-    # Comando de subida (usa build_rsync_command de rsync_command.py)
-    # - incluye --delete + --backup + --backup-dir=_papelera/FECHA
-    # - excluye "_papelera/" para no recursar
-    cmd, env = build_rsync_command(server_conf, str(local_path), remote_root)
- 
-    # Si el remoto está vacío, igualmente no habrá nada que "delete" (no rompe nada).
-    # Ejecutamos
-    run_rsync(cmd, env)   
-
-
-# -----------------------------------------------------------------------------
-# PULL: remoto -> local (trae cambios y _papelera; NO borra local)
-# -----------------------------------------------------------------------------
-
-def rsync_pull_main(server_conf, host_selected, remote_root, local_path):
-    """
-    Pull del contenido principal: queremos traer archivos nuevos/actualizados
-    SIN borrar los que solo existan en local (protección).
-    """
-    passw = server_conf.get("passw", "")
-    ssh_e = f"ssh -o StrictHostKeyChecking=no -p {server_conf['port']}"
-    src = f"{server_conf['user']}@{host_selected}:{remote_root}/"
-    dst = f"{str(local_path)}/"
-
-    # OJO: aquí NO usamos --delete ni --backup (no queremos borrar local en pull)
+    # --- Push (con delete + backup a _papelera) y filtros adecuados
+    env = os.environ.copy()
+    env["SSHPASS"] = server_conf.get("passw", "")
     cmd = [
-        "sshpass", "-p", passw,
-        "rsync",
+        "sshpass", "-e", "rsync",
+        "-avz",
+        "--update",                    # no pisa más nuevos en remoto
+        "--delete",                    # lo que no está en local, se borra en remoto...
+        "--backup",                    # ...pero va a _papelera
+        "--backup-dir=_papelera",
+        "--exclude", "_papelera/",
+        "--exclude", f"*{DELETED_MARKER_EXT}",
+        "--exclude", ".rsyncx_*.json",
+        "--exclude-from", str(RSYNC_FILTER_FILE),
+        "-e", f"ssh -o StrictHostKeyChecking=no -p {server_conf['port']}",
+        f"{local_path}/",
+        f"{server_conf['user']}@{host}:{remote_root}/"
+    ]
+    print("📤 Ejecutando rsync (push)...")
+    subprocess.run(cmd, check=False, env=env)
+
+    # --- Guardar snapshot actual tras push
+    write_state(group_conf, cur)
+
+# -----------------------------------------------------------------------------
+# PULL (aplica marcadores de borrado + trae cambios + espeja papelera)
+# -----------------------------------------------------------------------------
+def rsync_pull_main(server_conf, host, remote_root, local_path):
+    env = os.environ.copy()
+    env["SSHPASS"] = server_conf.get("passw", "")
+    cmd = [
+        "sshpass", "-e", "rsync",
+        "-avz",
+        "--update",                    # trae nuevos o más nuevos
+        "--exclude", "_papelera/",
+        "--exclude", f"*{DELETED_MARKER_EXT}",
+        "--exclude", ".rsyncx_*.json",
+        "--exclude-from", str(RSYNC_FILTER_FILE),
+        "-e", f"ssh -o StrictHostKeyChecking=no -p {server_conf['port']}",
+        f"{server_conf['user']}@{host}:{remote_root}/",
+        f"{local_path}/"
+    ]
+    print("📥 Ejecutando rsync (pull contenido)...")
+    subprocess.run(cmd, check=False, env=env)
+
+def rsync_pull_trash(server_conf, host, remote_root, local_path):
+    env = os.environ.copy()
+    env["SSHPASS"] = server_conf.get("passw", "")
+    cmd = [
+        "sshpass", "-e", "rsync",
         "-avz",
         "--update",
-        "--progress",
-        "--partial",
-        "--exclude-from", str(RSYNC_FILTER_FILE),  # aplica tu .rsync-filter
-        "--exclude", "_papelera/",
-        "-e", ssh_e,
-        src, dst
-    ]
-    print("🔵 Descargando (pull) contenido principal...")
-    try:
-        subprocess.run(cmd, check=True)
-    except subprocess.CalledProcessError as e:
-        print(f"❌ Error en pull (main): {e}")
-
-
-def rsync_pull_trash(server_conf, host_selected, remote_root, local_path):
-    """
-    Descarga la papelera remota si existe.
-    Si no existe, lo ignora sin marcar error.
-    """
-    print("🔵 Descargando (pull) papelera remota...")
-    cmd = [
-        "sshpass", "-p", server_conf["passw"],
-        "rsync", "-avz", "--update", "--progress", "--partial", "--delete",
+        "--delete",                    # espejo de _papelera
         "-e", f"ssh -o StrictHostKeyChecking=no -p {server_conf['port']}",
-        f"{server_conf['user']}@{host_selected}:{remote_root}/_papelera/",
+        f"{server_conf['user']}@{host}:{remote_root}/_papelera/",
         f"{local_path}/_papelera/"
     ]
-
-    try:
-        subprocess.run(cmd, check=True, text=True, capture_output=True)
-    except subprocess.CalledProcessError as e:
-        stderr = e.stderr or ""
-        if "No such file or directory" in stderr or "No such file" in stderr:
-            print("🗑 No hay papelera remota. Se creará automáticamente al subir archivos borrados.")
-        else:
-            print(f"⚠ Error en pull (trash): {stderr.strip()}")
-
+    print("🗑  Espejando papelera...")
+    subprocess.run(cmd, check=False, env=env)
 
 def sync_pull(group_conf, server_conf):
     print(f"\n🔵 DESCARGANDO (pull) grupo: {group_conf['grupo']}")
     local_path = Path(group_conf["sync"]).expanduser()
     local_path.mkdir(parents=True, exist_ok=True)
     remote_root = os.path.join(server_conf["remote"], group_conf["name_folder_backup"])
+    host = choose_reachable_host(server_conf)
 
-    host_selected = choose_reachable_host(server_conf)
-    # pull principal (no borra local) + pull de papelera (sí espejo)
-    rsync_pull_main(server_conf, host_selected, remote_root, local_path)
-    rsync_pull_trash(server_conf, host_selected, remote_root, local_path)
+    ensure_remote_papelera(server_conf, remote_root)
 
+    # 1) leer marcadores en servidor y aplicar borrados localmente
+    markers = get_deletion_markers(server_conf, host, remote_root)
+    if markers:
+        moved = apply_deletion_markers_locally(local_path, markers)
+        if moved:
+            print(f"🗑  Aplicados {moved} borrados (movidos a _papelera).")
+
+    # 2) traer contenido normal (sin _papelera)
+    rsync_pull_main(server_conf, host, remote_root, local_path)
+
+    # 3) espejo de _papelera
+    rsync_pull_trash(server_conf, host, remote_root, local_path)
+
+    # 4) snapshot de estado tras pull
+    cur = set(list_current_local_files(local_path))
+    write_state(group_conf, cur)
 
 # -----------------------------------------------------------------------------
-# RUN: push + pull
+# RUN (orden seguro: pull -> push)
 # -----------------------------------------------------------------------------
-
 def sync_run(group_conf, server_conf):
-    sync_push(group_conf, server_conf)
+    print(f"\n🔁 Ejecutando sincronización completa (pull → push) para '{group_conf['grupo']}'")
+    remote_path = f"{server_conf['remote'].rstrip('/')}/{group_conf['name_folder_backup']}"
+    ensure_remote_papelera(server_conf, remote_path) 
     sync_pull(group_conf, server_conf)
-    print("✨ Sincronización completa (push + pull).")
-
+    sync_push(group_conf, server_conf)
+    print("✨ Sincronización completa (pull + push).")
 
 # -----------------------------------------------------------------------------
-# PURGE: limpia papeleras local y remota
+# PURGE (limpiar papelera local y remota)
 # -----------------------------------------------------------------------------
-
 def purge_group_trash(group_conf, server_conf):
     print(f"\n🧹 Limpiando papelera: {group_conf['grupo']}")
     local_trash = Path(group_conf["sync"]).expanduser() / "_papelera"
     if local_trash.exists():
-        try:
-            shutil.rmtree(local_trash)
-            print(f"  ✔ Papelera local vaciada: {local_trash}")
-        except Exception as e:
-            print(f"  ⚠ No se pudo limpiar papelera local: {e}")
+        shutil.rmtree(local_trash, ignore_errors=True)
     local_trash.mkdir(parents=True, exist_ok=True)
 
-    # Remota
     host = choose_reachable_host(server_conf)
     remote_trash = os.path.join(server_conf["remote"], group_conf["name_folder_backup"], "_papelera")
-    passw = server_conf.get("passw", "")
+    env = os.environ.copy()
+    env["SSHPASS"] = server_conf.get("passw", "")
     cmd = [
-        "sshpass", "-p", passw,
+        "sshpass", "-e",
         "ssh", "-o", "StrictHostKeyChecking=no",
         "-p", str(server_conf["port"]),
         f"{server_conf['user']}@{host}",
-        f"find {remote_trash} -mindepth 1 -exec rm -rf {{}} +"
+        f"find '{remote_trash}' -mindepth 1 -exec rm -rf {{}} +"
     ]
-    try:
-        subprocess.run(cmd, check=True)
-        print(f"  ✔ Papelera remota vaciada: {remote_trash}")
-    except subprocess.CalledProcessError as e:
-        print(f"  ⚠ No se pudo limpiar papelera remota: {e}")
-
+    subprocess.run(cmd, check=False, env=env)
+    print("✅ Papelera local y remota vaciadas.")
 
 def purge_all(config):
     for g in config.SINCRONIZAR:
         purge_group_trash(g, config.servers[g["server"]])
     print("\n✅ Papeleras limpiadas (local y remota).")
 
-
 # -----------------------------------------------------------------------------
 # CLI
 # -----------------------------------------------------------------------------
-
 def build_arg_parser():
-    parser = argparse.ArgumentParser(
-        description="rsyncx - sincronizador seguro basado en rsync",
-        add_help=True
-    )
+    parser = argparse.ArgumentParser(description="rsyncx - sincronizador seguro basado en rsync")
     sub = parser.add_subparsers(dest="command")
-
-    # configure
-    sub.add_parser("configure", help="Instala dependencias y crea el archivo de configuración")
-
-    # push
-    p_push = sub.add_parser("push", help="Sube cambios (local -> remoto) con papelera versionada en remoto")
-    p_push.add_argument("grupo", nargs="?", help="Nombre del grupo a sincronizar (opcional). Si se omite, todos.")
-
-    # pull
-    p_pull = sub.add_parser("pull", help="Descarga cambios (remoto -> local) y sincroniza la papelera remota")
-    p_pull.add_argument("grupo", nargs="?", help="Nombre del grupo a sincronizar (opcional). Si se omite, todos.")
-
-    # run
-    p_run = sub.add_parser("run", help="Ejecuta push y luego pull")
-    p_run.add_argument("grupo", nargs="?", help="Nombre del grupo a sincronizar (opcional). Si se omite, todos.")
-
-    # purge
-    sub.add_parser("purge", help="Limpia papelera local y remota de todos los grupos")
-
+    sub.add_parser("configure", help="Prepara entorno y configuración inicial")
+    for cmd, desc in [
+        ("push", "Sube cambios locales (marca borrados y usa _papelera en remoto)"),
+        ("pull", "Descarga cambios, aplica borrados y espeja _papelera"),
+        ("run",  "Sincroniza en orden seguro: pull → push"),
+        ("purge","Limpia papeleras local y remota")
+    ]:
+        p = sub.add_parser(cmd, help=desc)
+        p.add_argument("grupo", nargs="?", help="Nombre del grupo a sincronizar")
     return parser
 
-
-def print_usage_examples():
-    print("""
-Uso:
-  rsyncx configure
-  rsyncx push [grupo]
-  rsyncx pull [grupo]
-  rsyncx run  [grupo]
-  rsyncx purge
-
-Ejemplos:
-  rsyncx configure
-  rsyncx push                # sube todos los grupos
-  rsyncx push nombreGrupo    # sube solo ese grupo
-  rsyncx pull                # descarga todos los grupos (incluye papelera remota)
-  rsyncx run                 # push + pull
-  rsyncx purge               # limpia papeleras (local y remota)
-""")
-
-
 def main():
-    # Si no hay argumentos, mostramos ayuda breve
     if len(sys.argv) == 1:
         print_header()
-        print_usage_examples()
+        print("Uso: rsyncx [configure|push|pull|run|purge] [grupo]")
         return 0
 
     parser = build_arg_parser()
     args = parser.parse_args()
 
     if args.command == "configure":
-        configure()
+        ensure_config_exists()
         return 0
 
-    # Para el resto de comandos necesitamos config cargada
     ensure_config_exists()
     config = load_config()
 
-    # Resolver grupos
     if getattr(args, "grupo", None):
         grupos = [g for g in config.SINCRONIZAR if g["grupo"] == args.grupo]
         if not grupos:
-            print(f"❌ Grupo '{args.grupo}' no encontrado en config.")
+            print(f"❌ Grupo '{args.grupo}' no encontrado.")
             return 1
     else:
-        grupos = list(config.SINCRONIZAR)
+        grupos = config.SINCRONIZAR
 
-    if args.command == "push":
-        for g in grupos:
-            server_conf = config.servers[g["server"]]
+    for g in grupos:
+        server_conf = config.servers[g["server"]]
+        if args.command == "push":
             sync_push(g, server_conf)
-        print("\n✔ push terminado.")
-        return 0
-
-    if args.command == "pull":
-        for g in grupos:
-            server_conf = config.servers[g["server"]]
+        elif args.command == "pull":
             sync_pull(g, server_conf)
-        print("\n✔ pull terminado.")
-        return 0
-
-    if args.command == "run":
-        for g in grupos:
-            server_conf = config.servers[g["server"]]
+        elif args.command == "run":
             sync_run(g, server_conf)
-        print("\n✔ run terminado.")
-        return 0
+        elif args.command == "purge":
+            purge_group_trash(g, server_conf)
 
-    if args.command == "purge":
-        purge_all(config)
-        return 0
-
-    # Si cae aquí, mostramos ayuda
-    print_usage_examples()
+    print(f"\n✔ Comando '{args.command}' ejecutado correctamente.")
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())
