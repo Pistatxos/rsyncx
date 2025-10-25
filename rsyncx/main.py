@@ -141,7 +141,10 @@ def sync_push(group_conf, server_conf):
     print(f"\n🟢 SUBIENDO (push) grupo: {group_conf['grupo']}")
     local_path = Path(group_conf["sync"]).expanduser()
     remote_root = os.path.join(server_conf["remote"], group_conf["name_folder_backup"])
+
+    # Detecta y guarda el host correcto (local primero, luego VPN)
     host = choose_reachable_host(server_conf)
+    server_conf["selected_host"] = host
     ensure_remote_dirs(server_conf, host, remote_root)
 
     cmd, env = build_rsync_command(server_conf, str(local_path), remote_root)    
@@ -156,7 +159,10 @@ def sync_pull(group_conf, server_conf):
     local_path = Path(group_conf["sync"]).expanduser()
     local_path.mkdir(parents=True, exist_ok=True)
     remote_root = os.path.join(server_conf["remote"], group_conf["name_folder_backup"])
+
+    # Detecta y guarda el host correcto (local primero, luego VPN)
     host = choose_reachable_host(server_conf)
+    server_conf["selected_host"] = host
     ensure_remote_dirs(server_conf, host, remote_root)
 
     fecha = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -184,22 +190,39 @@ def sync_pull(group_conf, server_conf):
 # -----------------------------------------------------------------------------
 def purge_group_trash(group_conf, server_conf):
     print(f"\n🧹 Limpiando papeleras para: {group_conf['grupo']}")
+
+    # 🗑 Limpia papelera local
     local_trash = Path(group_conf["sync"]).expanduser() / "_papelera"
     if local_trash.exists():
         shutil.rmtree(local_trash, ignore_errors=True)
     local_trash.mkdir(parents=True, exist_ok=True)
 
+    # 🌐 Detecta y guarda el host correcto (local primero, luego VPN)
     host = choose_reachable_host(server_conf)
-    remote_trash = os.path.join(server_conf["remote"], group_conf["name_folder_backup"], "_papelera")
+    server_conf["selected_host"] = host
+
+    # 💾 Limpia papelera remota
+    remote_trash = os.path.join(
+        server_conf["remote"],
+        group_conf["name_folder_backup"],
+        "_papelera"
+    )
+
     env = os.environ.copy()
     env["SSHPASS"] = server_conf.get("passw", "")
+
     cmd = [
-        "sshpass", "-e", "ssh", "-p", str(server_conf["port"]),
+        "sshpass", "-e",
+        "ssh", "-p", str(server_conf["port"]),
         f"{server_conf['user']}@{host}",
         f"rm -rf '{remote_trash}'/*"
     ]
-    subprocess.run(cmd, check=False, env=env)
-    print("✅ Papelera local y remota vaciadas.")
+
+    try:
+        subprocess.run(cmd, check=True, env=env)
+        print("✅ Papelera local y remota vaciadas correctamente.")
+    except subprocess.CalledProcessError:
+        print("⚠ No se pudo limpiar la papelera remota (posibles permisos insuficientes).")
 
 # -----------------------------------------------------------------------------
 # CLI
