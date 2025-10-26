@@ -43,6 +43,7 @@ def build_rsync_command(server_conf, source, remote):
         "--update",
         "--progress",
         "--partial",
+        "--delete",
         "--backup",
         f"--backup-dir={backup_dir}",
         "--include", ".git/",

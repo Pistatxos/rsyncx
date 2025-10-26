@@ -3,6 +3,16 @@
 ---
 ---
 
+## [0.1.8] — 2025-10-26
+- Pull borra carpetas, las pasa _papelera y informa de ello para tenerlo en cuenta.
+
+---
+
+## [0.1.7] — 2025-10-26
+- Se pone --delete de rsync al hacer push para tener en cuenta lo borrados y así trabajar entre equipos con estructura del local, lo borrado se guarda en _papelera y no se elimina hasta que el usuario quiera.
+
+---
+
 ## [0.1.6] — 2025-10-26
 - Al hacer push se descarga papelera remota para tener eliminados.
 - Se quita --delete de rsync al hacer push para mantener archivos ya subidos.

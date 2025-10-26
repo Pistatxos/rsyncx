@@ -189,6 +189,7 @@ def sync_pull(group_conf, server_conf):
         "sshpass", "-e", "rsync",
         "-avz",
         "--update",
+        "--delete",
         "--backup",
         f"--backup-dir=_papelera/{fecha}",
         "--exclude", "_papelera/",
@@ -200,6 +201,29 @@ def sync_pull(group_conf, server_conf):
     ]
     run_rsync(cmd, env)
     print(f"✨ Pull completo ({group_conf['grupo']}).")
+
+    ## _papelera
+    print("🗑  Sincronizando papelera remota en local...")
+
+    trash_cmd = [
+        "sshpass", "-e", "rsync",
+        "-avz",
+        "--update",
+        "--delete",  # Mantiene la papelera local igual que la remota
+        "-e", f"ssh -o StrictHostKeyChecking=no -p {server_conf['port']}",
+        f"{server_conf['user']}@{host}:{remote_root}/_papelera/",
+        f"{local_path}/_papelera/"
+    ]
+    subprocess.run(trash_cmd, check=False, env=env)
+
+    print("♻️ Papelera local actualizada desde remoto.")
+
+    ## Info papelera si nuevos archivos borrados
+    # Aviso si hay archivos movidos a papelera
+    trash_today = local_path / "_papelera" / fecha
+    if trash_today.exists():
+        print(f"⚠️  Se han movido archivos a la papelera local.")
+        print(f"   Revisa la carpeta: {trash_today}")
 
 # -----------------------------------------------------------------------------
 # PURGE (limpia papeleras)
