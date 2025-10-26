@@ -3,6 +3,12 @@
 ---
 ---
 
+## [0.1.6] — 2025-10-26
+- Al hacer push se descarga papelera remota para tener eliminados.
+- Se quita --delete de rsync al hacer push para mantener archivos ya subidos.
+
+---
+
 ## [0.1.5] — 2025-10-25
 - Actualizado push-pull-purge para que la conexión primero prueba en local y luego en vpn.
 

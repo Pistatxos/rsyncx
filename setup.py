@@ -89,7 +89,7 @@ post_install()
 
 setup(
     name="rsyncx",
-    version="0.1.5",
+    version="0.1.6",
     author="Mario x",
     description="Sincronizador seguro basado en rsync con control de papelera y multi-equipo",
     packages=find_packages(),

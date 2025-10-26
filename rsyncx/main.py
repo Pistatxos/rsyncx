@@ -151,6 +151,22 @@ def sync_push(group_conf, server_conf):
     run_rsync(cmd, env)
     print(f"✨ Push completo ({group_conf['grupo']}).")
 
+    # Sincronizando papelera remota en local.
+    print("🗑  Sincronizando papelera remota en local...")
+
+    trash_cmd = [
+        "sshpass", "-e", "rsync",
+        "-avz",
+        "--update",
+        "--delete",  # Mantiene la papelera local igual que la remota
+        "-e", f"ssh -o StrictHostKeyChecking=no -p {server_conf['port']}",
+        f"{server_conf['user']}@{host}:{remote_root}/_papelera/",
+        f"{local_path}/_papelera/"
+    ]
+    subprocess.run(trash_cmd, check=False, env=env)
+
+    print("♻️ Papelera local actualizada desde remoto.")
+
 # -----------------------------------------------------------------------------
 # PULL (remoto → local)
 # -----------------------------------------------------------------------------
