@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rsyncx"
-version = "0.1.8"
+version = "0.1.9"
 description = "Sincroniza tus datos de manera segura con rsyncx (basado en rsync) donde se incluye papelera para no perder datos, con .ignore para ignorar archivos o carpetas y válido para Synology o Servidor."
 authors = [
     { name = "Mario x" }

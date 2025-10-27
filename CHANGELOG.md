@@ -3,6 +3,11 @@
 ---
 ---
 
+## [0.1.9] — 2025-10-26
+- Se arregla mensaje al hacer "pull" si cambia la cantidad de _papelera para que el usuario lo tenga en cuenta.
+
+---
+
 ## [0.1.8] — 2025-10-26
 - Pull borra carpetas, las pasa _papelera y informa de ello para tenerlo en cuenta.
 

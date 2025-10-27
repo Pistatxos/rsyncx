@@ -181,6 +181,10 @@ def sync_pull(group_conf, server_conf):
     server_conf["selected_host"] = host
     ensure_remote_dirs(server_conf, host, remote_root)
 
+    # Contar carpetas en papelera antes
+    trash_root = local_path / "_papelera"
+    before_count = len([d for d in trash_root.iterdir() if d.is_dir()]) if trash_root.exists() else 0
+
     fecha = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     env = os.environ.copy()
     env["SSHPASS"] = server_conf.get("passw", "")
@@ -202,28 +206,25 @@ def sync_pull(group_conf, server_conf):
     run_rsync(cmd, env)
     print(f"✨ Pull completo ({group_conf['grupo']}).")
 
-    ## _papelera
+    # Sincronizar papelera
     print("🗑  Sincronizando papelera remota en local...")
-
     trash_cmd = [
         "sshpass", "-e", "rsync",
         "-avz",
         "--update",
-        "--delete",  # Mantiene la papelera local igual que la remota
+        "--delete",
         "-e", f"ssh -o StrictHostKeyChecking=no -p {server_conf['port']}",
         f"{server_conf['user']}@{host}:{remote_root}/_papelera/",
         f"{local_path}/_papelera/"
     ]
     subprocess.run(trash_cmd, check=False, env=env)
-
     print("♻️ Papelera local actualizada desde remoto.")
 
-    ## Info papelera si nuevos archivos borrados
-    # Aviso si hay archivos movidos a papelera
-    trash_today = local_path / "_papelera" / fecha
-    if trash_today.exists():
-        print(f"⚠️  Se han movido archivos a la papelera local.")
-        print(f"   Revisa la carpeta: {trash_today}")
+    # Comprobar si hay más carpetas ahora
+    after_count = len([d for d in trash_root.iterdir() if d.is_dir()]) if trash_root.exists() else 0
+    if after_count > before_count:
+        print(f"⚠️  Se han movido nuevos archivos a la papelera local.")
+        print(f"   Revisa la carpeta '_papelera' ({after_count - before_count} nuevas).")
 
 # -----------------------------------------------------------------------------
 # PURGE (limpia papeleras)
